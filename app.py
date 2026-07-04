@@ -36,7 +36,8 @@ log_container = st.container()
 
 def stream_callback(message):
     with log_container:
-        st.markdown(message)
+        # Escape dollar signs so Streamlit doesn't parse them as LaTeX math
+        st.markdown(message.replace("$", "\\$"))
         time.sleep(0.5) # Slight delay for visual effect
 
 # Check for API keys
