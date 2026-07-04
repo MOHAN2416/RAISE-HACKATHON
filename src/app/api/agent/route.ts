@@ -57,32 +57,58 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing GROQ_API_KEY in .env" }, { status: 500 });
   }
 
-  let balances: Record<string, number> = DEFAULT_BALANCES;
+  let balances: Record<string, any> = DEFAULT_BALANCES;
+  let checkingReserve = 1500000;
+  let concentrationLimit = 40;
+  let ttsVoice = "alloy";
+
   try {
     const body = await req.json();
     if (body.balances) {
       balances = body.balances;
     }
+    if (body.policy) {
+      checkingReserve = body.policy.checkingReserve ?? 1500000;
+      concentrationLimit = body.policy.concentrationLimit ?? 40;
+    }
+    if (body.ttsVoice) {
+      ttsVoice = body.ttsVoice;
+    }
   } catch (e) {}
 
   function get_balances() {
-    return balances;
+    const flat: Record<string, number> = {};
+    Object.entries(balances).forEach(([k, v]) => {
+      flat[k] = typeof v === 'object' && v !== null ? v.balance : v;
+    });
+    return flat;
   }
 
   function calculate_surplus() {
     const checking_total = Object.entries(balances)
-      .filter(([k]) => k !== 'Vultr Treasury')
-      .reduce((sum, [_, v]) => sum + v, 0);
-    return Math.max(0, checking_total - 1500000);
+      .filter(([k, v]) => {
+        if (v && typeof v === 'object') {
+          return v.category === 'checking';
+        }
+        return k !== 'Vultr Treasury';
+      })
+      .reduce((sum, [_, v]) => {
+        const val = typeof v === 'object' && v !== null ? v.balance : v;
+        return sum + Number(val);
+      }, 0);
+    return Math.max(0, checking_total - checkingReserve);
   }
 
   function execute_sweep(amount: number, destination: string, source: string) {
+    const destYield = (balances[destination] && typeof balances[destination] === 'object') 
+      ? (balances[destination].yield_rate || 0.0542) 
+      : 0.0542;
     return {
       status: "success",
       swept_amount: amount,
       source: source || "Silicon Valley Bank",
       destination: destination,
-      expected_annual_yield: amount * 0.0542,
+      expected_annual_yield: amount * destYield,
     };
   }
 
@@ -96,7 +122,7 @@ export async function POST(req: Request) {
         const messages: any = [
           {
             role: "system",
-            content: "You are the ApexLiquidity Corporate Treasury Risk Agent. We must maintain exactly $1,500,000 across all operating checking accounts. Check balances, calculate surplus, and sweep any excess into Vultr Secure Yield Engine (5.42% APY). Remember the single-product concentration limit of 40%. Finally, provide a 2 sentence summary of what you did. Use the execute_sweep tool with the correct source account (e.g. 'Silicon Valley Bank').",
+            content: `You are the ApexLiquidity Corporate Treasury Risk Agent. We must maintain exactly $${checkingReserve.toLocaleString()} across all operating checking accounts. Check balances, calculate surplus, and sweep any excess into Vultr Secure Yield Engine (5.42% APY) or other savings destination. Remember the single-product concentration limit of ${concentrationLimit}%. Finally, provide a 2 sentence summary of what you did. Use the execute_sweep tool with the correct source account (e.g. 'Silicon Valley Bank').`,
           },
         ];
 
@@ -127,7 +153,20 @@ export async function POST(req: Request) {
               let result;
               if (name === "get_balances") result = get_balances();
               else if (name === "calculate_surplus") result = calculate_surplus();
-              else if (name === "execute_sweep") result = execute_sweep((args as any).amount, (args as any).destination, (args as any).source);
+              else if (name === "execute_sweep") {
+                result = execute_sweep((args as any).amount, (args as any).destination, (args as any).source);
+                controller.enqueue(new TextEncoder().encode(JSON.stringify({ 
+                  type: "proposal", 
+                  proposal: {
+                    id: "prop_" + Math.floor(Math.random() * 10000),
+                    source: (args as any).source || "Silicon Valley Bank",
+                    target: (args as any).destination,
+                    amount: (args as any).amount,
+                    yield_increase: (args as any).amount * (balances[(args as any).destination]?.yield_rate || 0.0542),
+                    status: "pending"
+                  }
+                }) + "\n"));
+              }
 
               sendLog(`Tool Result: ${JSON.stringify(result)}`);
 
@@ -142,7 +181,7 @@ export async function POST(req: Request) {
             sendLog(`Agent: ${msg.content}`);
             
             sendLog("🎙️ Synthesizing Voice Report...");
-            if (process.env.GRADIUM_API_KEY) {
+            if (process.env.GRADIUM_API_KEY && ttsVoice && ttsVoice !== "disabled") {
               const ttsRes = await fetch("https://api.gradium.ai/api/post/speech/tts", {
                 method: "POST",
                 headers: {
@@ -152,7 +191,7 @@ export async function POST(req: Request) {
                 body: JSON.stringify({
                   model: "tts-1",
                   input: msg.content,
-                  voice: "alloy"
+                  voice: ttsVoice
                 }),
               });
               

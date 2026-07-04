@@ -114,7 +114,68 @@ export default function Dashboard() {
   const [isQueuePending, setIsQueuePending] = useState<boolean>(false);
   const [activePolicyCheck, setActivePolicyCheck] = useState<'none' | 'safety' | 'concentration'>('none');
 
+  // Dynamic Policy settings
+  const [checkingReserve, setCheckingReserve] = useState<number>(1500000);
+  const [concentrationLimit, setConcentrationLimit] = useState<number>(40);
 
+  // Custom Banking Node Form settings
+  const [newAccountName, setNewAccountName] = useState("");
+  const [newAccountType, setNewAccountType] = useState("Checking");
+  const [newAccountBalance, setNewAccountBalance] = useState<number>(500000);
+  const [newAccountYield, setNewAccountYield] = useState<number>(0.0);
+  const [showAddAccountForm, setShowAddAccountForm] = useState(false);
+
+  // Audio / Speech settings
+  const [ttsVoice, setTtsVoice] = useState<string>("alloy");
+  const [ttsEnabled, setTtsEnabled] = useState<boolean>(true);
+  const [agentTranscript, setAgentTranscript] = useState<string>("");
+
+  // Audit Ledger log history
+  interface AuditRecord {
+    id: string;
+    time: string;
+    source: string;
+    target: string;
+    amount: number;
+    yield_increase: number;
+    status: "approved" | "rejected" | "pending";
+  }
+  const [auditLedger, setAuditLedger] = useState<AuditRecord[]>([]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("apex_audit_ledger");
+    if (saved) {
+      try {
+        setAuditLedger(JSON.parse(saved));
+      } catch (e) {}
+    }
+  }, []);
+
+  const saveAuditLedger = (records: AuditRecord[]) => {
+    setAuditLedger(records);
+    localStorage.setItem("apex_audit_ledger", JSON.stringify(records));
+  };
+
+  const handleClearAuditLedger = () => {
+    saveAuditLedger([]);
+  };
+
+  const handleAddAccount = () => {
+    if (!newAccountName) return;
+    setBalances(prev => ({
+      ...prev,
+      [newAccountName]: {
+        type: newAccountType,
+        balance: newAccountBalance,
+        yield_rate: newAccountYield / 100,
+        category: newAccountType.toLowerCase() === 'checking' ? 'checking' : 'savings'
+      }
+    }));
+    setNewAccountName("");
+    setNewAccountBalance(500000);
+    setNewAccountYield(0.0);
+    setShowAddAccountForm(false);
+  };
 
   // Fetch status from backend API
   const fetchData = useCallback(async () => {
@@ -131,7 +192,11 @@ export default function Dashboard() {
         performance: { total_assets: 6000000, annual_yield: 12000, average_apy: 0.002 }
       };
       
-      setBalances(data.balances || {});
+      setBalances(prev => {
+        // Only set default balances if they aren't initialized yet to preserve user additions
+        if (Object.keys(prev).length > 0) return prev;
+        return data.balances || {};
+      });
       setPolicyText(data.policy || "");
       setMarketYields(data.market_yields || {});
       setPerformance(data.performance || { total_assets: 0, annual_yield: 0, average_apy: 0 });
@@ -146,8 +211,6 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 15000);
-    return () => clearInterval(interval);
   }, [fetchData]);
 
 
@@ -161,19 +224,21 @@ export default function Dashboard() {
     setActivePolicyCheck('none');
     setLogs([]);
     setProposals([]);
+    setAgentTranscript("");
     setChartViewMode("current");
 
     try {
-      // Prepare balances payload
-      const flatBalances: Record<string, number> = {};
-      Object.entries(balances).forEach(([k, v]: any) => {
-         flatBalances[k] = v.balance;
-      });
-
       const res = await fetch('/api/agent', { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ balances: flatBalances })
+        body: JSON.stringify({ 
+          balances: balances,
+          policy: {
+            checkingReserve: checkingReserve,
+            concentrationLimit: concentrationLimit
+          },
+          ttsVoice: ttsEnabled ? ttsVoice : "disabled"
+        })
       });
       if (!res.ok) throw new Error("Optimization engine failed to respond.");
       
@@ -199,16 +264,28 @@ export default function Dashboard() {
                  });
                  // Dynamic visual link between log checks and policy cards
                  const msg = parsed.message.toLowerCase();
-                 if (msg.includes('safety') || msg.includes('$1,500,000') || msg.includes('$1.5m')) {
+                 if (msg.includes('safety') || msg.includes('reserve') || msg.includes('runway')) {
                    setActivePolicyCheck('safety');
-                 } else if (msg.includes('concentration') || msg.includes('40%')) {
+                 } else if (msg.includes('concentration') || msg.includes('limit') || msg.includes('product')) {
                    setActivePolicyCheck('concentration');
                  } else {
                    setActivePolicyCheck('none');
                  }
+
+                 // Extract agent vocal transcript summary
+                 if (parsed.message.startsWith("Agent: ")) {
+                   setAgentTranscript(parsed.message.replace("Agent: ", ""));
+                 }
                } else if (parsed.type === "audio") {
                  const audio = new Audio("data:audio/mp3;base64," + parsed.audioBase64);
                  audio.play();
+               } else if (parsed.type === "proposal") {
+                 setProposals(prev => {
+                   if (prev.some(p => p.source === parsed.proposal.source && p.target === parsed.proposal.target && p.amount === parsed.proposal.amount)) {
+                     return prev;
+                   }
+                   return [...prev, parsed.proposal];
+                 });
                }
              } catch (e) {}
            }
@@ -216,7 +293,8 @@ export default function Dashboard() {
       }
       
       setIsOptimizing(false);
-      setProposals(CACHED_OPTIMIZATION_PAYLOAD.proposed_transfers || []);
+      // Fallback only if no dynamic proposal was streamed
+      setProposals(prev => prev.length > 0 ? prev : CACHED_OPTIMIZATION_PAYLOAD.proposed_transfers || []);
       setActivePolicyCheck('none');
       setTimeout(() => {
         setIsModalOpen(true);
@@ -228,6 +306,14 @@ export default function Dashboard() {
       console.warn("Backend optimization failed. Reverting to cached demo payload:", err);
       // Fallback is loaded
       setIsOptimizing(false);
+      setLogs(CACHED_OPTIMIZATION_PAYLOAD.logs || []);
+      setProposals(CACHED_OPTIMIZATION_PAYLOAD.proposed_transfers || []);
+      setAgentTranscript("Sweep proposed: Silicon Valley Bank -> Vultr Secure Yield Engine (Amount: $2,100,000.00, Yield gain: +$112,770.00/yr).");
+      setTimeout(() => {
+        setIsModalOpen(true);
+        setIsQueuePending(false);
+      }, 1500);
+      setChartViewMode("proposed");
     }
   };
 
@@ -236,7 +322,13 @@ export default function Dashboard() {
     try {
       setLogs([]);
       setProposals([]);
+      setAgentTranscript("");
       setChartViewMode("current");
+      setCheckingReserve(1500000);
+      setConcentrationLimit(40);
+      localStorage.removeItem("apex_audit_ledger");
+      setAuditLedger([]);
+      setBalances({});
       await fetchData();
     } catch (err: any) {
       alert(err.message);
@@ -262,6 +354,19 @@ export default function Dashboard() {
         }
         return newBals;
       });
+
+      // record to audit ledger
+      const newRecord: AuditRecord = {
+        id: prop.id + "_" + Date.now(),
+        time: new Date().toLocaleTimeString(),
+        source: prop.source,
+        target: prop.target,
+        amount: prop.amount,
+        yield_increase: prop.yield_increase,
+        status: "approved"
+      };
+      saveAuditLedger([newRecord, ...auditLedger]);
+
     } catch (err: any) {
       alert(err.message);
     }
@@ -270,14 +375,51 @@ export default function Dashboard() {
   // Reject a sweep proposal
   const handleRejectProposal = async (proposalId: string) => {
     setProposals((prev) => prev.map(p => p.id === proposalId ? { ...p, status: 'rejected' } : p));
+    const prop = proposals.find(p => p.id === proposalId);
+    if (prop) {
+      const newRecord: AuditRecord = {
+        id: prop.id + "_" + Date.now(),
+        time: new Date().toLocaleTimeString(),
+        source: prop.source,
+        target: prop.target,
+        amount: prop.amount,
+        yield_increase: prop.yield_increase,
+        status: "rejected"
+      };
+      saveAuditLedger([newRecord, ...auditLedger]);
+    }
   };
 
   // Approve all sweeps in one click
   const handleApproveAll = async () => {
     const pending = proposals.filter(p => p.status === 'pending');
-    for (const prop of pending) {
-      await handleApproveProposal(prop.id);
-    }
+    if (pending.length === 0) return;
+
+    const newRecords: AuditRecord[] = pending.map(prop => ({
+      id: prop.id + "_" + Date.now(),
+      time: new Date().toLocaleTimeString(),
+      source: prop.source,
+      target: prop.target,
+      amount: prop.amount,
+      yield_increase: prop.yield_increase,
+      status: "approved"
+    }));
+
+    setBalances(prev => {
+      const newBals = { ...prev };
+      pending.forEach(prop => {
+        if (newBals[prop.source]) {
+          newBals[prop.source] = { ...newBals[prop.source], balance: newBals[prop.source].balance - prop.amount };
+        }
+        if (newBals[prop.target]) {
+          newBals[prop.target] = { ...newBals[prop.target], balance: newBals[prop.target].balance + prop.amount };
+        }
+      });
+      return newBals;
+    });
+
+    setProposals(prev => prev.map(p => p.status === 'pending' ? { ...p, status: 'approved' } : p));
+    saveAuditLedger([...newRecords, ...auditLedger]);
   };
 
   // Computations and formatting for MetricsGrid and ChartWidget
@@ -287,21 +429,23 @@ export default function Dashboard() {
     type: detail.type,
     balance: detail.balance,
     yield_rate: detail.yield_rate,
-    min_balance: name === "Silicon Valley Bank" ? 1500000.0 : name === "Chase Bank" ? 1200000.0 : 0.0,
+    min_balance: detail.category === 'checking' ? checkingReserve : 0.0,
     category: detail.category
   }));
 
-  const totalAssets = performance.total_assets || 0;
+  const totalAssets = accountsArray.reduce((acc, curr) => acc + curr.balance, 0);
   
   const checkingAssets = accountsArray
     .filter(a => a.category === 'checking')
     .reduce((acc, curr) => acc + curr.balance, 0);
 
   // Policies Dynamic Check
-  const isSafetyBaselineCompliant = checkingAssets >= 1500000.0;
-  const svbBalance = balances["Silicon Valley Bank"]?.balance || 0.0;
-  const svbConcentration = totalAssets > 0 ? (svbBalance / totalAssets) : 0.0;
-  const isConcentrationLimitCompliant = svbConcentration <= 0.40;
+  const isSafetyBaselineCompliant = checkingAssets >= checkingReserve;
+  const maxConcentrationAccount = accountsArray.reduce((max, curr) => {
+    const conc = totalAssets > 0 ? (curr.balance / totalAssets) : 0;
+    return conc > max.concentration ? { name: curr.name, concentration: conc } : max;
+  }, { name: "", concentration: 0 });
+  const isConcentrationLimitCompliant = maxConcentrationAccount.concentration <= (concentrationLimit / 100);
 
   const pendingProposals = proposals.filter(p => p.status === 'pending');
   const pendingCount = pendingProposals.length;
@@ -408,8 +552,9 @@ export default function Dashboard() {
           <span>Synchronizing with secure treasury matrix...</span>
         </div>
       ) : (
-        /* Dynamic dashboard layout grid containing Left and Right Panes, fading in gracefully */
-        <div className="transition-all duration-1000 ease-out animate-[fadeIn_0.7s_ease-out] flex flex-col lg:flex-row gap-6 items-start w-full opacity-100 translate-y-0">
+        <>
+          {/* Dynamic dashboard layout grid containing Left and Right Panes, fading in gracefully */}
+          <div className="transition-all duration-1000 ease-out animate-[fadeIn_0.7s_ease-out] flex flex-col lg:flex-row gap-6 items-start w-full opacity-100 translate-y-0">
           
           {/* LEFT PANE (65% width) - Financial metrics and data visualization */}
           <div className="w-full lg:w-[65%] flex flex-col gap-6">
@@ -430,14 +575,14 @@ export default function Dashboard() {
                     <Landmark className="w-4 h-4 text-cyan-400" />
                     <h3 className="text-xs font-extrabold text-white uppercase tracking-wider">Account Registry</h3>
                   </div>
-                  <span className="text-[10px] font-mono text-zinc-500 font-bold">{accountsArray.length} active nodes</span>
+                  <span className="text-[10px] font-mono text-zinc-550 font-bold">{accountsArray.length} active nodes</span>
                 </div>
                 <div className="space-y-3">
                   {accountsArray.map(acct => (
                     <div key={acct.id} className="flex justify-between items-center group p-2.5 rounded-xl hover:bg-zinc-900/40 border border-transparent hover:border-zinc-800/40 transition-all duration-200">
                       <div className="flex flex-col">
                         <span className="text-xs font-bold text-white group-hover:text-cyan-400 transition-colors">{acct.name}</span>
-                        <span className="text-[10px] font-bold text-zinc-500 flex items-center gap-1.5 mt-0.5 uppercase tracking-wide">
+                        <span className="text-[10px] font-bold text-zinc-550 flex items-center gap-1.5 mt-0.5 uppercase tracking-wide">
                           <span className={`w-1.5 h-1.5 rounded-full ${acct.category === 'checking' ? 'bg-cyan-500' : 'bg-purple-500'}`} />
                           {acct.type} &bull; <span className="font-mono text-zinc-400 font-bold text-[9px] bg-zinc-900 px-1 py-0.2 rounded border border-zinc-800/40">{(acct.yield_rate * 100).toFixed(2)}% APY</span>
                         </span>
@@ -459,9 +604,80 @@ export default function Dashboard() {
                       </div>
                     </div>
                   ))}
+
+                  {/* Add Node form inline */}
+                  {showAddAccountForm ? (
+                    <div className="bg-zinc-950/60 border border-zinc-900/80 p-3.5 rounded-2xl space-y-3 mt-2 animate-[fadeIn_0.3s_ease-out] select-none">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-[8.5px] font-bold text-zinc-500 uppercase tracking-wider">Node Name</label>
+                          <input 
+                            type="text" 
+                            placeholder="Fidelity MMF" 
+                            value={newAccountName}
+                            onChange={(e) => setNewAccountName(e.target.value)}
+                            className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 font-bold text-xs p-1.5 rounded-lg outline-none focus:border-cyan-500 transition-colors"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[8.5px] font-bold text-zinc-500 uppercase tracking-wider">Type</label>
+                          <select 
+                            value={newAccountType}
+                            onChange={(e) => setNewAccountType(e.target.value)}
+                            className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 font-bold text-[11px] p-1.5 rounded-lg outline-none focus:border-cyan-500 transition-colors"
+                          >
+                            <option value="Checking">Checking</option>
+                            <option value="Savings">Savings (High-Yield)</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-[8.5px] font-bold text-zinc-500 uppercase tracking-wider">Balance ($)</label>
+                          <input 
+                            type="number" 
+                            value={newAccountBalance}
+                            onChange={(e) => setNewAccountBalance(Number(e.target.value))}
+                            className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 font-mono text-xs p-1.5 rounded-lg outline-none focus:border-cyan-500 transition-colors"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[8.5px] font-bold text-zinc-500 uppercase tracking-wider">Yield APY (%)</label>
+                          <input 
+                            type="number" 
+                            step="0.01" 
+                            value={newAccountYield}
+                            onChange={(e) => setNewAccountYield(Number(e.target.value))}
+                            className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 font-mono text-xs p-1.5 rounded-lg outline-none focus:border-cyan-500 transition-colors"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-2 pt-1.5 font-mono text-[9px] font-bold uppercase">
+                        <button 
+                          onClick={() => setShowAddAccountForm(false)}
+                          className="flex-1 py-1.5 bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-300 rounded-lg active:scale-95 transition-all"
+                        >
+                          Cancel
+                        </button>
+                        <button 
+                          onClick={handleAddAccount}
+                          className="flex-1 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-zinc-950 rounded-lg active:scale-95 transition-all shadow-md"
+                        >
+                          Create Node
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button 
+                      onClick={() => setShowAddAccountForm(true)}
+                      className="w-full py-2 bg-zinc-950 hover:bg-zinc-900/60 border border-dashed border-zinc-800 hover:border-zinc-700 text-zinc-450 hover:text-zinc-300 font-mono font-black text-[9px] uppercase tracking-wider rounded-xl active:scale-95 transition-all flex items-center justify-center gap-1.5 mt-1"
+                    >
+                      + Add Banking Node Account
+                    </button>
+                  )}
                 </div>
               </div>
-
+ 
               {/* Treasury Policies Checklist */}
               <div className="glass-panel p-5 rounded-3xl border border-white/[0.01] flex flex-col gap-4">
                 <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
@@ -469,9 +685,44 @@ export default function Dashboard() {
                     <FileText className="w-4 h-4 text-purple-400" />
                     <h3 className="text-xs font-extrabold text-white uppercase tracking-wider">Treasury Policies</h3>
                   </div>
-                  <span className="text-[10px] font-mono text-zinc-500 font-bold">Directive Rules</span>
+                  <span className="text-[10px] font-mono text-zinc-550 font-bold">Directive Rules</span>
                 </div>
                 <div className="space-y-3">
+
+                  {/* Policy Configuration Sliders */}
+                  <div className="bg-zinc-950/40 border border-zinc-900 p-3.5 rounded-2xl space-y-3 text-[10px] select-none">
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between font-bold text-zinc-450 uppercase tracking-wider text-[8.5px]">
+                        <span>Safety Reserve Target</span>
+                        <span className="text-cyan-400 font-mono">${(checkingReserve / 1000000).toFixed(2)}M</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="500000" 
+                        max="3000000" 
+                        step="100000" 
+                        value={checkingReserve}
+                        onChange={(e) => setCheckingReserve(Number(e.target.value))}
+                        className="w-full h-1 bg-zinc-900 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between font-bold text-zinc-450 uppercase tracking-wider text-[8.5px]">
+                        <span>Max Concentration Limit</span>
+                        <span className="text-purple-400 font-mono">{concentrationLimit}%</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="10" 
+                        max="80" 
+                        step="5" 
+                        value={concentrationLimit}
+                        onChange={(e) => setConcentrationLimit(Number(e.target.value))}
+                        className="w-full h-1 bg-zinc-900 rounded-lg appearance-none cursor-pointer accent-purple-400"
+                      />
+                    </div>
+                  </div>
                   
                   {/* Rule 1: Operating Burn safety baseline */}
                   <div className={`flex gap-3 items-start p-2.5 rounded-xl transition-all duration-300 border ${
@@ -485,12 +736,12 @@ export default function Dashboard() {
                         Safety reserve baseline
                       </span>
                       <p className="text-[10px] text-zinc-550 leading-relaxed mt-0.5">
-                        Maintain a minimum of $1,500,000 in core operating checking accounts. 
+                        Maintain a minimum of ${checkingReserve.toLocaleString()} in core operating checking accounts. 
                         (Current Checking: ${checkingAssets.toLocaleString()})
                       </p>
                     </div>
                   </div>
-
+ 
                   {/* Rule 2: Single-Product Concentration Risk Ceiling */}
                   <div className={`flex gap-3 items-start p-2.5 rounded-xl transition-all duration-300 border ${
                     activePolicyCheck === 'concentration' 
@@ -503,12 +754,12 @@ export default function Dashboard() {
                         Concentration risk limit
                       </span>
                       <p className="text-[10px] text-zinc-550 leading-relaxed mt-0.5">
-                        No more than 40% of corporate assets allocated to any single product or provider. 
-                        (SVB Concentration: {(svbConcentration * 100).toFixed(1)}% &bull; Limit: 40%)
+                        No more than {concentrationLimit}% of corporate assets allocated to any single product or provider. 
+                        ({maxConcentrationAccount.name || "None"}: {(maxConcentrationAccount.concentration * 100).toFixed(1)}% &bull; Limit: {concentrationLimit}%)
                       </p>
                     </div>
                   </div>
-
+ 
                   {/* Raw directive text block */}
                   <div className="border-t border-zinc-900/80 pt-2.5 mt-2">
                     <span className="text-[9px] font-bold text-zinc-550 uppercase tracking-wider block">Directive Text:</span>
@@ -516,7 +767,7 @@ export default function Dashboard() {
                       {policyText}
                     </p>
                   </div>
-
+ 
                 </div>
               </div>
             </div>
@@ -713,6 +964,48 @@ export default function Dashboard() {
                     <div>Input Cost: <span className="text-zinc-350 font-bold">Free T1</span></div>
                     <div>Autonomy Score: <span className="text-zinc-350 font-bold">Grade-A</span></div>
                   </div>
+
+                  {/* Voice Synthesis Control */}
+                  <div className="border-t border-zinc-900 pt-3.5 space-y-3">
+                    <div className="flex justify-between items-center text-xs">
+                      <div>
+                        <span className="text-zinc-300 font-bold block">Voice Synthesis Report</span>
+                        <span className="text-[10px] text-zinc-500 font-semibold mt-0.5">Synthesize vocal action summary</span>
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        checked={ttsEnabled}
+                        onChange={(e) => setTtsEnabled(e.target.checked)}
+                        className="w-4 h-4 rounded border-zinc-900 text-cyan-500 focus:ring-cyan-500/50 bg-zinc-950 cursor-pointer accent-cyan-400"
+                      />
+                    </div>
+
+                    {ttsEnabled && (
+                      <div className="flex justify-between items-center text-xs transition-all duration-300 animate-[fadeIn_0.3s_ease-out]">
+                        <span className="text-zinc-300 font-bold">Voice Actor Profile</span>
+                        <select 
+                          value={ttsVoice} 
+                          onChange={(e) => setTtsVoice(e.target.value)}
+                          className="bg-zinc-950 border border-zinc-905 rounded-xl px-2 py-1.5 text-zinc-300 font-mono text-[10px] focus:outline-none focus:border-cyan-500"
+                        >
+                          <option value="alloy">Alloy (Balanced)</option>
+                          <option value="echo">Echo (Warm)</option>
+                          <option value="onyx">Onyx (Deep)</option>
+                          <option value="nova">Nova (Bright)</option>
+                          <option value="shimmer">Shimmer (Professional)</option>
+                        </select>
+                      </div>
+                    )}
+
+                    {agentTranscript && (
+                      <div className="space-y-1.5 transition-all duration-300 animate-[fadeIn_0.3s_ease-out]">
+                        <span className="text-[8.5px] font-bold text-cyan-400 uppercase tracking-wider block">Voice Briefing Transcript</span>
+                        <div className="bg-zinc-950/70 border border-zinc-900 p-2.5 rounded-xl font-mono text-[9px] text-zinc-400 max-h-[75px] overflow-y-auto leading-relaxed border-dashed">
+                          "{agentTranscript}"
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -828,6 +1121,69 @@ export default function Dashboard() {
           </div>
 
         </div>
+
+        {/* Persistent Sweep Audit Ledger */}
+        <div className="glass-panel p-6 rounded-3xl border border-white/[0.01] flex flex-col gap-4 mt-6">
+          <div className="flex justify-between items-center border-b border-zinc-900/60 pb-3">
+            <div className="flex items-center gap-2">
+              <Landmark className="w-4 h-4 text-emerald-400" />
+              <h3 className="text-xs font-extrabold text-white uppercase tracking-wider">Treasury Settlement Ledger (Audit History)</h3>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-[9px] font-mono text-zinc-550 font-bold uppercase">{auditLedger.length} executed sweeps</span>
+              {auditLedger.length > 0 && (
+                <button 
+                  onClick={handleClearAuditLedger}
+                  className="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-[9px] font-mono text-zinc-400 hover:text-white rounded-lg active:scale-95 transition-all font-bold"
+                >
+                  Clear Ledger
+                </button>
+              )}
+            </div>
+          </div>
+          
+          {auditLedger.length === 0 ? (
+            <div className="text-center py-10 text-zinc-550 flex flex-col items-center gap-2 select-none">
+              <FileText className="w-8 h-8 text-zinc-700" />
+              <p className="text-xs font-bold text-white uppercase tracking-wider">Ledger is Empty</p>
+              <p className="text-[9px] max-w-xs leading-relaxed text-zinc-500">Pending sweeps approved through the Authorization Queue will be permanently recorded here for accounting audit.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left font-mono text-[10px] text-zinc-450">
+                <thead>
+                  <tr className="border-b border-zinc-900/60 text-zinc-500 font-bold uppercase text-[9px]">
+                    <th className="py-2.5 pb-3">Settlement Date</th>
+                    <th>Source Node</th>
+                    <th>Target Node</th>
+                    <th className="text-right">Transfer Vol</th>
+                    <th className="text-right">Annual APY Yield</th>
+                    <th className="text-center pr-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-900/60">
+                  {auditLedger.map((record) => (
+                    <tr key={record.id} className="hover:bg-zinc-900/10 transition-colors">
+                      <td className="py-2.5 text-zinc-500 font-bold text-[9px]">{record.time}</td>
+                      <td className="font-bold text-white">{record.source}</td>
+                      <td className="text-purple-400 font-bold">{record.target}</td>
+                      <td className="text-right text-cyan-400 font-bold">${record.amount.toLocaleString()}</td>
+                      <td className="text-right text-emerald-400 font-bold">+${record.yield_increase.toLocaleString()}/yr</td>
+                      <td className="text-center pr-3 font-bold">
+                        <span className={`px-2 py-0.5 rounded text-[8px] uppercase ${
+                          record.status === 'approved' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+                        }`}>
+                          {record.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </>
       )}
 
       {/* Action modal for sweep validation and execute logic */}
