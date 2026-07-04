@@ -111,9 +111,10 @@ export default function ActionModal({ isOpen, transfers, onConfirm, onClose }: A
         const nextVal = prev + step;
         if (nextVal >= 100) {
           clearInterval(timer);
-          setShowSuccess(true);
-          // Trigger confirmation callback to update parent state balances
-          onConfirm();
+          setTimeout(() => {
+            setShowSuccess(true);
+            onConfirm();
+          }, 0);
           return 100;
         }
         return nextVal;
