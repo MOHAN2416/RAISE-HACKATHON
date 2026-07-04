@@ -2,7 +2,7 @@
 
 ApexLiquidity is an autonomous, AI-driven corporate treasury optimization platform. It continuously monitors corporate banking nodes, enforces safety baselines and concentration risk limits, and autonomously proposes or executes capital sweeps into high-yield vehicles to maximize treasury efficiency.
 
-![ApexLiquidity Dashboard Demo](./public/demo-screenshot.png) *(Note: Add a screenshot of the dashboard here)*
+![ApexLiquidity Dashboard Demo](./public/demo-screenshot.png) 
 
 ## 🌟 Key Features
 
