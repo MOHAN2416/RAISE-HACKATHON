@@ -8,31 +8,12 @@ const groq = new OpenAI({
   baseURL: "https://api.groq.com/openai/v1",
 });
 
-const balances = {
-  Operating_Account_Main: 650000,
-  Operating_Account_Secondary: 120000,
-  Payroll_Account: 300000,
-  Tax_Reserve: 150000,
-  Vendor_Payments: 80000,
+const DEFAULT_BALANCES = {
+  "Silicon Valley Bank": 4500000,
+  "Chase Bank": 1200000,
+  "Vultr Treasury": 300000
 };
 
-function get_balances() {
-  return balances;
-}
-
-function calculate_surplus() {
-  const total = Object.values(balances).reduce((a, b) => a + b, 0);
-  return Math.max(0, total - 500000);
-}
-
-function execute_sweep(amount: number, destination: string) {
-  return {
-    status: "success",
-    swept_amount: amount,
-    destination: destination,
-    expected_annual_yield: amount * 0.04,
-  };
-}
 
 const tools: any = [
   {
@@ -47,7 +28,7 @@ const tools: any = [
     type: "function",
     function: {
       name: "calculate_surplus",
-      description: "Calculate the total investable surplus cash based on the corporate policy of keeping a 500k runway.",
+      description: "Calculate the total investable surplus cash based on the corporate policy of keeping a 1.5M runway.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -60,17 +41,49 @@ const tools: any = [
         type: "object",
         properties: {
           amount: { type: "number", description: "The amount to sweep." },
+          source: { type: "string", description: "The source checking account to withdraw from." },
           destination: { type: "string", description: "The investment destination." },
         },
-        required: ["amount", "destination"],
+        required: ["amount", "source", "destination"],
       },
     },
   },
 ];
 
-export async function POST() {
+
+
+export async function POST(req: Request) {
   if (!process.env.GROQ_API_KEY) {
     return NextResponse.json({ error: "Missing GROQ_API_KEY in .env" }, { status: 500 });
+  }
+
+  let balances: Record<string, number> = DEFAULT_BALANCES;
+  try {
+    const body = await req.json();
+    if (body.balances) {
+      balances = body.balances;
+    }
+  } catch (e) {}
+
+  function get_balances() {
+    return balances;
+  }
+
+  function calculate_surplus() {
+    const checking_total = Object.entries(balances)
+      .filter(([k]) => k !== 'Vultr Treasury')
+      .reduce((sum, [_, v]) => sum + v, 0);
+    return Math.max(0, checking_total - 1500000);
+  }
+
+  function execute_sweep(amount: number, destination: string, source: string) {
+    return {
+      status: "success",
+      swept_amount: amount,
+      source: source || "Silicon Valley Bank",
+      destination: destination,
+      expected_annual_yield: amount * 0.0542,
+    };
   }
 
   const stream = new ReadableStream({
@@ -83,7 +96,7 @@ export async function POST() {
         const messages: any = [
           {
             role: "system",
-            content: "You are the ApexLiquidity Corporate Treasury Risk Agent. We must maintain exactly $500,000 across all operating accounts. Check balances, calculate surplus, and sweep any excess into 4% yield bonds. Finally, provide a 2 sentence summary of what you did.",
+            content: "You are the ApexLiquidity Corporate Treasury Risk Agent. We must maintain exactly $1,500,000 across all operating checking accounts. Check balances, calculate surplus, and sweep any excess into Vultr Secure Yield Engine (5.42% APY). Remember the single-product concentration limit of 40%. Finally, provide a 2 sentence summary of what you did. Use the execute_sweep tool with the correct source account (e.g. 'Silicon Valley Bank').",
           },
         ];
 
@@ -114,7 +127,7 @@ export async function POST() {
               let result;
               if (name === "get_balances") result = get_balances();
               else if (name === "calculate_surplus") result = calculate_surplus();
-              else if (name === "execute_sweep") result = execute_sweep((args as any).amount, (args as any).destination);
+              else if (name === "execute_sweep") result = execute_sweep((args as any).amount, (args as any).destination, (args as any).source);
 
               sendLog(`Tool Result: ${JSON.stringify(result)}`);
 
@@ -130,11 +143,11 @@ export async function POST() {
             
             sendLog("🎙️ Synthesizing Voice Report...");
             if (process.env.GRADIUM_API_KEY) {
-              const ttsRes = await fetch("https://api.gradium.ai/v1/audio/speech", {
+              const ttsRes = await fetch("https://api.gradium.ai/api/post/speech/tts", {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
-                  "Authorization": `Bearer ${process.env.GRADIUM_API_KEY}`,
+                  "x-api-key": process.env.GRADIUM_API_KEY,
                 },
                 body: JSON.stringify({
                   model: "tts-1",
