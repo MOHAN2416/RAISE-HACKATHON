@@ -12,6 +12,8 @@ import MetricsGrid from '../components/metrics-grid';
 import ChartWidget from '../components/chart-widget';
 import ActionModal from '../components/action-modal';
 import TerminalLog from '../components/terminal-log';
+import AnalyticsCharts from '../components/analytics-charts';
+import { TiltCard } from '../components/ui/tilt-card';
 
 interface Account {
   id: string;
@@ -565,11 +567,14 @@ export default function Dashboard() {
             {/* Asset Allocation Matrix ChartWidget with controlled viewMode */}
             <ChartWidget accounts={accountsArray} proposals={chartProposals} viewMode={chartViewMode} />
 
+            {/* Analytics Charts (Cashflow and Sweep Execution) */}
+            <AnalyticsCharts />
+
             {/* Account Registry & Compliance Checklist Split */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               
               {/* Account Registry Card */}
-              <div className="glass-panel p-5 rounded-3xl border border-white/[0.01] flex flex-col gap-4">
+              <TiltCard glow={true} className="glass-panel p-5 rounded-3xl border border-white/[0.01] flex flex-col gap-4 h-full">
                 <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
                   <div className="flex items-center gap-2">
                     <Landmark className="w-4 h-4 text-cyan-400" />
@@ -676,10 +681,10 @@ export default function Dashboard() {
                     </button>
                   )}
                 </div>
-              </div>
+              </TiltCard>
  
               {/* Treasury Policies Checklist */}
-              <div className="glass-panel p-5 rounded-3xl border border-white/[0.01] flex flex-col gap-4">
+              <TiltCard glow={true} className="glass-panel p-5 rounded-3xl border border-white/[0.01] flex flex-col gap-4 h-full">
                 <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
                   <div className="flex items-center gap-2">
                     <FileText className="w-4 h-4 text-purple-400" />
@@ -769,7 +774,7 @@ export default function Dashboard() {
                   </div>
  
                 </div>
-              </div>
+              </TiltCard>
             </div>
           </div>
 
@@ -777,7 +782,7 @@ export default function Dashboard() {
           <div className="w-full lg:w-[35%] flex flex-col gap-6">
             
             {/* Main AI Agent Control Center Card */}
-            <div className="glass-panel p-6 rounded-3xl border border-white/[0.02] flex flex-col gap-6 relative overflow-hidden">
+            <TiltCard glow={true} className="glass-panel p-6 rounded-3xl border border-white/[0.02] flex flex-col gap-6 relative overflow-hidden h-full">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-gradient-to-r from-transparent via-cyan-500/40 to-transparent pointer-events-none" />
               
               {/* Header Title inside Control Center */}
@@ -1008,7 +1013,7 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
-            </div>
+            </TiltCard>
 
             {/* Authorization Sweep Queue Panel */}
             <div className="glass-panel p-5 rounded-3xl border border-white/[0.01] flex flex-col gap-4">

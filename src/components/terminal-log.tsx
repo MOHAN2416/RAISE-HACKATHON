@@ -151,7 +151,17 @@ function LogRow({ log, idx }: LogRowProps) {
       }`}>
         {log.type === 'info' && <span className="text-zinc-600 mr-1.5">&bull;</span>}
         {log.type === 'thought' && <span className="text-zinc-600 mr-1.5">&gt;</span>}
-        {highlightKeywords(log.message)}
+        {(() => {
+          if (log.type === 'tool_result') {
+            try {
+              const parsed = JSON.parse(log.message);
+              return <pre className="bg-zinc-950/80 p-2 rounded border border-zinc-900 mt-1 overflow-x-auto text-[9px] text-zinc-400">{JSON.stringify(parsed, null, 2)}</pre>;
+            } catch(e) {
+              return highlightKeywords(log.message);
+            }
+          }
+          return highlightKeywords(log.message);
+        })()}
       </div>
 
       {/* Accordion verification sub-block */}
