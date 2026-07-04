@@ -109,6 +109,8 @@ def run_treasury_agent(stream_callback=None):
                 function_name = tool_call.function.name
                 try:
                     args = json.loads(tool_call.function.arguments)
+                    if not isinstance(args, dict):
+                        args = {}
                 except:
                     args = {}
                 
