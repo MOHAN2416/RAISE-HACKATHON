@@ -17,7 +17,7 @@ client = OpenAI(
 )
 
 # Groq model
-MODEL = "llama3-70b-8192"
+MODEL = "llama-3.3-70b-versatile"
 
 # Define our tools in the OpenAI format
 agent_tools = [
